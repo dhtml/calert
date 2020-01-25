@@ -1,0 +1,7 @@
+name: Content Alert
+type: module
+description: 'allows users to subscribe to new content created in a content type.'
+package: DHTML
+version: VERSION
+core: 8.x
+configure: calert.form

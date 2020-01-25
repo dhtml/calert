@@ -1,0 +1,4 @@
+administer calert:
+  title: 'Administer content alert settings'
+access site-wide calert:
+  title: 'Use the content alert features'

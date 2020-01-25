@@ -1,0 +1,185 @@
+<?php
+
+/**
+ * @file
+ * Enables the use of personal and site-wide calert forms.
+ */
+use Drupal\Core\Entity\EntityInterface;
+use Drupal\Core\Form\FormStateInterface;
+use Drupal\Core\Routing\RouteMatchInterface;
+use Drupal\node\Entity\Node;
+use Drupal\user\Entity\User;
+
+/**
+ * Implements hook_help().
+ */
+function calert_help($route_name, RouteMatchInterface $route_match)
+{
+
+    switch ($route_name) {
+        case 'help.page.calert':
+            $output = '';
+            $output .= '<h3>' . t('About') . '</h3>';
+            $output .= '<p>' . t('The Contact Alert allows members to subscribe for notifications') . '</p>';
+            $output .= '<h3>' . t('Uses') . '</h3>';
+            return $output;
+    }
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter().
+ *
+ * Add the enable personal calert form to an individual user's account page.
+ *
+ * @see \Drupal\user\ProfileForm::form()
+ */
+function calert_form_user_form_alter(&$form, FormStateInterface $form_state)
+{
+    $form['calert'] = [
+        '#type'   => 'details',
+        '#title'  => t('Content Alert'),
+        '#open'   => true,
+        '#weight' => 5,
+    ];
+    $account = $form_state->getFormObject()->getEntity();
+    if (!\Drupal::currentUser()->isAnonymous() && $account->id()) {
+        $account_data = \Drupal::service('user.data')->get('calert', $account->id(), 'enabled');
+    }
+
+    $config = \Drupal::config('calert.settings');
+
+    $node_types = \Drupal\node\Entity\NodeType::loadMultiple();
+    // If you need to display them in a drop down:
+    foreach ($node_types as $node_type) {
+        $_id    = $node_type->id();
+        $_label = $node_type->label();
+
+        $_value = \Drupal::service('user.data')->get('calert', $account->id(), 'enabled_' . $_id);
+
+        $form['calert']['calert_' . $_id] = [
+            '#type'          => 'checkbox',
+            '#title'         => t('Subscribe notifications for ' . $_label),
+            '#default_value' => $_value,
+        ];
+
+    }
+
+    $form['actions']['submit']['#submit'][] = 'calert_user_profile_form_submit';
+}
+
+/**
+ * Submit callback for the user profile form to save the contact page setting.
+ */
+function calert_user_profile_form_submit($form, FormStateInterface $form_state)
+{
+    $account = $form_state->getFormObject()->getEntity();
+
+    $node_types = \Drupal\node\Entity\NodeType::loadMultiple();
+    // If you need to display them in a drop down:
+    foreach ($node_types as $node_type) {
+        $_id = $node_type->id();
+        \Drupal::service('user.data')->set('calert', $account->id(), 'enabled_' . $_id, (int) $form_state->getValue('calert_' . $_id));
+    }
+}
+
+/**
+ * Implements hook_ENTITY_TYPE_presave() for node entities.
+ */
+function calert_node_presave(EntityInterface $node)
+{
+    if ($node->isNew()) {
+        //node is published for the first time
+        calert_send_broadcast($node,true);
+    }
+}
+
+
+/**
+ * Implements hook_ENTITY_TYPE_update() for node entities.
+ */
+function calert_node_update(EntityInterface $node)
+{
+  //send notification if user is subscribed
+  calert_send_broadcast($node,false);
+}
+
+/**
+ * Implements hook_ENTITY_TYPE_predelete() for node entities.
+ */
+function calert_node_predelete(EntityInterface $node)
+{
+}
+
+/**
+* send broadcast message
+*/
+function calert_send_broadcast($entity,$new=false) {
+  //load entity here
+  //$entity = \Drupal::entityManager()->getStorage('node')->load($nid);
+
+  //get list of users
+  $query = \Drupal::entityQuery('user');
+  $uids = $query->execute();
+  foreach($uids as $uid) {
+    //check if user is subscribed to content type
+    $_enabled = \Drupal::service('user.data')->get('calert', $uid, 'enabled_' . $entity->getType());
+
+    if($_enabled) {
+      $user = User::load($uid);
+      calert_send_mail($entity,$user, $new);
+    }
+  }
+}
+
+/**
+ * Send email notification routine
+ */
+function calert_send_mail($entity,$user, $new = true)
+{
+    //mail template
+    $key    = 'calert_send_notify';
+    $module = 'calert';
+
+    $mailManager = \Drupal::service('plugin.manager.mail');
+    $to          = $user->getEmail();
+
+    $params['new']        = $new;
+    $params['message']    = $entity->get('body')->value;
+    $params['node_title'] = $entity->label();
+    $params['node_type'] = $entity->getType();
+    $params['user'] = $user;
+
+    $langcode             = $user->getPreferredLangcode();
+    $send                 = true;
+
+    $result = $mailManager->mail($module, $key, $to, $langcode, $params, null, $send);
+    if ($result['result'] !== true) {
+    }
+
+}
+
+/**
+ * Implements hook_mail().
+ */
+function calert_mail($key, &$message, $params)
+{
+    $options = array(
+        'langcode' => $message['langcode'],
+    );
+
+    switch ($key) {
+        case 'calert_send_notify':
+            $message['headers']['MIME-Version']              = '1.0';
+            $message['headers']['Content-Type']              = 'text/html; charset=UTF-8; format=flowed';
+            $message['headers']['Content-Transfer-Encoding'] = '8Bit';
+            $message['headers']['X-Mailer']                  = 'Drupal';
+
+            $type=$params['node_type'];
+            $type2=ucfirst($type);
+
+            $message['from']    = \Drupal::config('system.site')->get('mail');
+            $message['subject'] = t('@publish: @title', array('@title' => $params['node_title'], '@publish' => $params['new']==true ? "$type2 created" : "$type2 updated"), $options);
+            $message['body'][]  = "Content body:<br/>" . $params['message'];
+            break;
+    }
+}

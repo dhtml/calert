@@ -1,0 +1,7 @@
+calert.content:
+  path: '/calert'
+  defaults:
+    _controller: '\Drupal\calert\Controller\BaseController::content'
+    _title: 'Base Alert'
+  requirements:
+    _permission: 'access content'
